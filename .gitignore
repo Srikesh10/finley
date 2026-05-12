@@ -1,0 +1,25 @@
+# Environment
+.env
+
+# Data — never commit raw financial data
+data/
+
+# Generated reports and exports
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# IDE / tools
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
