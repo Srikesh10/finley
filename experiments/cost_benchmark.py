@@ -7,6 +7,9 @@ Current: JSON summary + full system prompt + Haiku
 Opus judges both answers for each question. Side-by-side report.
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import re
 import json
 import time

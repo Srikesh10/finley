@@ -5,6 +5,7 @@ Streamlit frontend for the Finley financial advisor pipeline.
 
 import os
 import json
+import tempfile
 import time
 import streamlit as st
 import pandas as pd
@@ -196,11 +197,13 @@ def fmt_dollar(n):
     return f"${n:,.0f}"
 
 def get_client():
-    return AnthropicBedrock(
-        aws_access_key=AWS_KEY,
-        aws_secret_key=AWS_SECRET_KEY,
-        aws_region=AWS_REGION,
-    )
+    if "client" not in st.session_state:
+        st.session_state.client = AnthropicBedrock(
+            aws_access_key=AWS_KEY,
+            aws_secret_key=AWS_SECRET_KEY,
+            aws_region=AWS_REGION,
+        )
+    return st.session_state.client
 
 def step_dots(current, total=4):
     dots = ""
@@ -240,7 +243,6 @@ def render_upload():
 
         if uploaded:
             with st.spinner("Processing transactions..."):
-                import tempfile
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as f:
                     f.write(uploaded.read())
                     tmp_path = f.name

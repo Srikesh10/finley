@@ -4,10 +4,10 @@ app:
 	streamlit run app.py
 
 benchmark:
-	python sequential_learner.py
+	python experiments/sequential_learner.py
 
 cost:
-	python cost_benchmark.py
+	python experiments/cost_benchmark.py
 
 report:
 	python scripts/export_summary.py

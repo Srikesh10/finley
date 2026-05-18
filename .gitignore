@@ -7,6 +7,14 @@ data/
 # Generated reports and exports
 reports/
 
+# Excel exports — may contain derived financial data
+*.xlsx
+*.xls
+*.csv
+
+# Cache
+.finley_cache/
+
 # Python
 __pycache__/
 *.py[cod]

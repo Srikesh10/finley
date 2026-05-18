@@ -10,6 +10,9 @@ For each query:
 Generates sequential_report.txt showing score progression per question.
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import re
 import json
 import time
