@@ -89,7 +89,7 @@ def print_eval_report(result: dict):
             print(f"      Claimed: {c.get('value_claimed')} | Actual: {c.get('value_actual')} | Off: {c.get('delta_pct')}%")
 
 
-def main():
+def main():  # noqa: C901
     if not os.path.exists(TX_FILE):
         print(f"Error: {TX_FILE} not found.")
         return
@@ -111,22 +111,23 @@ def main():
     if summary.get("net_worth_liquid"):
         print(f"  Liquid net worth: ${summary['net_worth_liquid']:,.2f}")
 
-    profile = collect_user_profile()
-
     print("\n" + "=" * 60)
     print("  Analyzing your finances...")
     print("=" * 60 + "\n")
 
     client  = make_client()
-    message = build_prompt(profile, summary)
+    message = build_prompt({}, summary)
 
     with client.messages.stream(
         model=MODEL,
-        max_tokens=10000,
-        thinking={"type": "enabled", "budget_tokens": 8000},
+        max_tokens=2000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": message}],
     ) as stream:
         for text in stream.text_stream:
             print(text, end="", flush=True)
     print("\n")
+
+
+if __name__ == "__main__":
+    main()

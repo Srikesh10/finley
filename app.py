@@ -11,7 +11,12 @@ import streamlit as st
 import pandas as pd
 from anthropic import AnthropicBedrock
 
-from finley import process_transactions, build_prompt, SYSTEM_PROMPT, AWS_KEY, AWS_SECRET_KEY, AWS_REGION, MODEL
+from finley import (
+    process_transactions, build_prompt, SYSTEM_PROMPT,
+    AWS_KEY, AWS_SECRET_KEY, AWS_REGION,
+    MODEL, SONNET_MODEL, HAIKU_MODEL,
+    classify, classify_complexity, python_answer,
+)
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 
@@ -180,12 +185,12 @@ st.markdown("""
 # ── Session State Init ────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "step": "upload",          # upload → onboard → analysis → chat
+    "step": "upload",          # upload → analysis → chat
     "summary": None,
     "profile": {},
     "messages": [],
     "advice": "",
-    "onboard_step": 1,
+    "suggestions": [],
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -204,6 +209,65 @@ def get_client():
             aws_region=AWS_REGION,
         )
     return st.session_state.client
+
+CHAT_WINDOW = 8  # recent chat messages to keep beyond the first pair
+
+def _generate_suggestions(question: str, answer: str, client) -> list:
+    prompt = (
+        f"The user asked: {question}\n\n"
+        f"Finley answered: {answer}\n\n"
+        "Suggest 3 short follow-up questions the user might ask about their finances. "
+        "Each question must be 6-10 words. Return a JSON array of 3 strings only, no explanation."
+    )
+    try:
+        resp = client.messages.create(
+            model=HAIKU_MODEL,
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        start, end = raw.find("["), raw.rfind("]")
+        suggestions = json.loads(raw[start : end + 1])
+        if isinstance(suggestions, list) and len(suggestions) == 3:
+            return [str(s) for s in suggestions]
+        return []
+    except Exception:
+        return []
+
+def _build_api_messages(messages: list) -> list:
+    """
+    Build a clean message list safe for any model:
+    - Strips ThinkingBlocks from assistant messages (Haiku/Sonnet reject them)
+    - Always keeps the first pair (has the full transaction JSON + profile)
+    - Applies a rolling window on the rest so context doesn't grow unboundedly
+    """
+    def _text_only(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                (b.text if hasattr(b, "text") else b.get("text", ""))
+                for b in content
+                if (hasattr(b, "type") and b.type == "text") or
+                   (isinstance(b, dict) and b.get("type") == "text")
+            ]
+            return "\n".join(p for p in parts if p)
+        return str(content)
+
+    if not messages:
+        return []
+
+    clean = [{"role": messages[0]["role"], "content": _text_only(messages[0]["content"])}]
+    if len(messages) > 1:
+        clean.append({"role": messages[1]["role"], "content": _text_only(messages[1]["content"])})
+
+    rest = messages[2:]
+    if len(rest) > CHAT_WINDOW:
+        rest = rest[-CHAT_WINDOW:]
+    for msg in rest:
+        clean.append({"role": msg["role"], "content": _text_only(msg["content"])})
+
+    return clean
 
 def step_dots(current, total=4):
     dots = ""
@@ -236,7 +300,7 @@ def render_upload():
             if os.path.exists(demo_path):
                 with st.spinner("Loading transactions..."):
                     st.session_state.summary = process_transactions(demo_path)
-                st.session_state.step = "onboard"
+                st.session_state.step = "analysis"
                 st.rerun()
             else:
                 st.error(f"{demo_path} not found in project folder.")
@@ -247,71 +311,10 @@ def render_upload():
                     f.write(uploaded.read())
                     tmp_path = f.name
                 st.session_state.summary = process_transactions(tmp_path)
-            st.session_state.step = "onboard"
+            st.session_state.step = "analysis"
             st.rerun()
 
-# ── Step 2: Onboarding ────────────────────────────────────────────────────────
-
-def render_onboard():
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        s = st.session_state.onboard_step
-
-        step_dots(s)
-
-        if s == 1:
-            st.markdown("### How old are you?")
-            age = st.text_input("Age", placeholder="e.g. 28", label_visibility="collapsed")
-            if st.button("Continue →"):
-                if age.strip():
-                    st.session_state.profile["age"] = age.strip()
-                    st.session_state.onboard_step = 2
-                    st.rerun()
-
-        elif s == 2:
-            st.markdown("### What's your monthly take-home pay?")
-            st.markdown('<p style="color:#6b7280;font-size:0.85rem;">After tax, what hits your bank account each month</p>', unsafe_allow_html=True)
-            income = st.text_input("Monthly income", placeholder="e.g. 5000", label_visibility="collapsed")
-            if st.button("Continue →"):
-                if income.strip():
-                    st.session_state.profile["monthly_take_home"] = f"${income.strip()}"
-                    st.session_state.onboard_step = 3
-                    st.rerun()
-
-        elif s == 3:
-            st.markdown("### What's your #1 financial goal right now?")
-            goal = st.selectbox(
-                "Goal",
-                [
-                    "Eliminate debt",
-                    "Build emergency fund",
-                    "Save for a home down payment",
-                    "Build retirement savings",
-                    "Understand where my money goes",
-                ],
-                label_visibility="collapsed",
-            )
-            if st.button("Continue →"):
-                st.session_state.profile["primary_goal"] = goal.lower()
-                st.session_state.onboard_step = 4
-                st.rerun()
-
-        elif s == 4:
-            st.markdown("### Last few questions")
-            st.markdown('<p style="color:#6b7280;font-size:0.85rem;">Yes / No</p>', unsafe_allow_html=True)
-            emergency = st.radio("Do you have 3+ months of expenses saved?", ["No", "Yes"], horizontal=True)
-            retirement = st.radio("Are you contributing to a 401k?", ["No", "Yes"], horizontal=True)
-            cc = st.radio("Do you carry a credit card balance each month?", ["No", "Yes"], horizontal=True)
-
-            if st.button("Analyze my finances →"):
-                st.session_state.profile["has_3_month_emergency_fund"] = emergency == "Yes"
-                st.session_state.profile["contributing_to_401k"] = retirement == "Yes"
-                st.session_state.profile["carries_credit_card_balance"] = cc == "Yes"
-                st.session_state.step = "analysis"
-                st.rerun()
-
-# ── Step 3: Analysis + Advice ─────────────────────────────────────────────────
+# ── Step 2: Analysis + Advice ─────────────────────────────────────────────────
 
 def render_analysis():
     summary = st.session_state.summary
@@ -389,11 +392,11 @@ def render_analysis():
 
             advice_placeholder = st.empty()
             advice_text = ""
+            final = None
 
             with client.messages.stream(
                 model=MODEL,
                 max_tokens=2000,
-                thinking={"type": "enabled", "budget_tokens": 8000},
                 system=SYSTEM_PROMPT,
                 messages=st.session_state.messages,
             ) as stream:
@@ -409,7 +412,6 @@ def render_analysis():
                             f'<div class="advice-box">{advice_text}▌</div>',
                             unsafe_allow_html=True,
                         )
-
                 final = stream.get_final_message()
 
             st.session_state.advice = advice_text
@@ -458,7 +460,19 @@ def render_chat():
         else:
             st.markdown(f'<div class="msg-finley">{content}</div>', unsafe_allow_html=True)
 
+    # Suggestion buttons below most recent Finley response
+    if st.session_state.suggestions:
+        cols = st.columns(len(st.session_state.suggestions))
+        for i, (col, suggestion) in enumerate(zip(cols, st.session_state.suggestions)):
+            with col:
+                if st.button(suggestion, key=f"suggestion_{i}", use_container_width=True):
+                    st.session_state.pending_suggestion = suggestion
+                    st.session_state.suggestions = []
+                    st.rerun()
+
     st.markdown("<br>", unsafe_allow_html=True)
+
+    pending = st.session_state.pop("pending_suggestion", None)
 
     # Input
     col1, col2 = st.columns([5, 1])
@@ -467,28 +481,48 @@ def render_chat():
     with col2:
         send = st.button("Send", use_container_width=True)
 
-    if send and followup.strip():
-        st.session_state.messages.append({"role": "user", "content": followup.strip()})
+    question = None
+    if pending:
+        question = pending
+    elif send and followup.strip():
+        question = followup.strip()
 
-        client = get_client()
-        response_text = ""
-        resp_placeholder = st.empty()
+    if question:
+        st.session_state.suggestions = []
+        st.session_state.messages.append({"role": "user", "content": question})
 
-        with client.messages.stream(
-            model=MODEL,
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=st.session_state.messages,
-        ) as stream:
-            for text in stream.text_stream:
-                response_text += text
-                resp_placeholder.markdown(
-                    f'<div class="msg-finley">{response_text}▌</div>',
-                    unsafe_allow_html=True,
-                )
+        route = classify(question)
+
+        if route == "python":
+            response_text = python_answer(question, summary) or ""
+            if not response_text:
+                route = "llm"
+
+        if route == "llm":
+            complexity = classify_complexity(question)
+            chat_model = HAIKU_MODEL if complexity == "data" else SONNET_MODEL
+
+            client = get_client()
+            response_text = ""
+            resp_placeholder = st.empty()
+
+            with client.messages.stream(
+                model=chat_model,
+                max_tokens=1000,
+                system=SYSTEM_PROMPT,
+                messages=_build_api_messages(st.session_state.messages),
+            ) as stream:
+                for text in stream.text_stream:
+                    response_text += text
+                    resp_placeholder.markdown(
+                        f'<div class="msg-finley">{response_text}▌</div>',
+                        unsafe_allow_html=True,
+                    )
+            resp_placeholder.empty()
+
+            st.session_state.suggestions = _generate_suggestions(question, response_text, client)
 
         st.session_state.messages.append({"role": "assistant", "content": response_text})
-        resp_placeholder.empty()
         st.rerun()
 
 # ── Router ────────────────────────────────────────────────────────────────────
@@ -497,8 +531,6 @@ step = st.session_state.step
 
 if step == "upload":
     render_upload()
-elif step == "onboard":
-    render_onboard()
 elif step == "analysis":
     render_analysis()
 elif step == "chat":

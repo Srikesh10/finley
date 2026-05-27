@@ -1,13 +1,14 @@
 """
-scripts/judge_queries.py — Add Opus accuracy scores to queries_results.xlsx.
+scripts/judge_queries.py — Add Opus accuracy scores to a queries results Excel.
 
-Reads each question + answer, sends to Opus with the transaction summary,
-appends three columns: Verdict, Accuracy (0-10), Judge Notes.
-Supports checkpointing: interrupted runs resume from where they stopped.
-Output: reports/queries_results_judged.xlsx
+Usage:
+  python -m scripts.judge_queries --input reports/queries_results_sonnet.xlsx
+  python -m scripts.judge_queries --input reports/queries_results_haiku.xlsx
+
+Output: replaces _results_ with _judged_ in the input filename.
 """
 
-import sys, os
+import sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -29,12 +30,20 @@ from scripts.utils import (
     row_fill,
 )
 
-OPUS_MODEL   = "us.anthropic.claude-opus-4-6-v1"
-INPUT_FILE   = "reports/queries_results.xlsx"
-OUTPUT_FILE  = "reports/queries_results_judged.xlsx"
-CHECKPOINT   = "reports/.judge_queries_checkpoint.json"
-MAX_RETRIES  = 3
-RETRY_DELAY  = 5
+# ── Args ──────────────────────────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", default="reports/queries_results.xlsx",
+                    help="Path to the results Excel file to judge")
+args = parser.parse_args()
+
+INPUT_FILE  = args.input
+OUTPUT_FILE = INPUT_FILE.replace("queries_results", "queries_judged")
+CHECKPOINT  = INPUT_FILE.replace("queries_results", ".judge_checkpoint").replace(".xlsx", ".json")
+
+OPUS_MODEL  = "us.anthropic.claude-opus-4-6-v1"
+MAX_RETRIES = 3
+RETRY_DELAY = 5
 
 JUDGE_SYSTEM = """You are a financial data accuracy auditor. You will be given:
 1. A question a user asked about their finances
@@ -75,7 +84,6 @@ def parse_judgment(raw: str) -> dict:
         return json.loads(cleaned[start:end])
     except (ValueError, json.JSONDecodeError):
         pass
-    # Regex fallback — handles truncated or slightly malformed JSON
     verdict_m = re.search(r'"verdict"\s*:\s*"(PASS|FAIL)"', raw, re.IGNORECASE)
     score_m   = re.search(r'"score"\s*:\s*(\d+)', raw)
     notes_m   = re.search(r'"notes"\s*:\s*"([^"]+)"', raw)
@@ -104,12 +112,28 @@ print(f" done — {len(summary_json):,} chars")
 wb_in = openpyxl.load_workbook(INPUT_FILE)
 ws_in = wb_in.active
 
+# Read header row to find column positions (handles extra columns like "Route")
+header_row = [str(c or "").strip().lower() for c in next(ws_in.iter_rows(min_row=2, max_row=2, values_only=True))]
+def _col(name: str, fallback: int) -> int:
+    for i, h in enumerate(header_row):
+        if name in h:
+            return i
+    return fallback
+
+ci_n       = _col("#",        0)
+ci_q       = _col("question", 1)
+ci_a       = _col("answer",   2)
+ci_runtime = _col("runtime",  3)
+ci_in      = _col("input",    4)
+ci_out     = _col("output",   5)
+ci_cost    = _col("cost",     6)
+
 rows = []
 for row in ws_in.iter_rows(min_row=3, max_row=ws_in.max_row - 1, values_only=True):
-    if row[0] and isinstance(row[0], int):
-        rows.append({"n": row[0], "question": row[1], "answer": row[2],
-                     "runtime": row[3], "input_tokens": row[4],
-                     "output_tokens": row[5], "cost": row[6]})
+    if row[ci_n] and isinstance(row[ci_n], int):
+        rows.append({"n": row[ci_n], "question": row[ci_q], "answer": row[ci_a],
+                     "runtime": row[ci_runtime], "input_tokens": row[ci_in],
+                     "output_tokens": row[ci_out], "cost": row[ci_cost]})
 
 print(f"Loaded {len(rows)} questions from {INPUT_FILE}")
 
@@ -119,7 +143,7 @@ client = AnthropicBedrock(
     aws_region=AWS_REGION,
 )
 
-# ── Load checkpoint ──────────────────────────────────────────────────────────
+# ── Load checkpoint ───────────────────────────────────────────────────────────
 
 judgments = []
 if os.path.exists(CHECKPOINT):
@@ -169,6 +193,7 @@ Evaluate the answer's accuracy against the transaction summary."""
             else:
                 print(f" retry {attempt}...", end="", flush=True)
                 time.sleep(RETRY_DELAY * attempt)
+
     cost = round((inp / 1_000_000 * 15.0) + (out / 1_000_000 * 75.0), 4)
     total_opus_cost += cost
 
@@ -178,7 +203,6 @@ Evaluate the answer's accuracy against the transaction summary."""
     j["_n"] = r["n"]
     judgments.append(j)
 
-    # Checkpoint after every judgment
     with open(CHECKPOINT, "w", encoding="utf-8") as f:
         json.dump(judgments, f)
 
@@ -197,20 +221,21 @@ HEADERS = ["#", "Question", "Answer", "Runtime (s)", "Input Tokens",
            "Output Tokens", "Cost ($)", "Verdict", "Accuracy (0-10)", "Judge Notes"]
 WIDTHS  = [5, 40, 65, 13, 14, 15, 10, 10, 16, 55]
 
-passes = sum(1 for j in judgments if j.get("verdict") == "PASS")
+passes    = sum(1 for j in judgments if j.get("verdict") == "PASS")
 avg_score = round(sum(j.get("score", 0) for j in judgments) / len(judgments), 1)
 total_cost = round(sum(r["cost"] or 0 for r in rows) + total_opus_cost, 4)
 
-# Title
+# Derive model label from filename
+model_label = os.path.basename(INPUT_FILE).replace("queries_results_", "").replace(".xlsx", "").upper()
+
 ws.merge_cells("A1:J1")
 ws["A1"].value = (f"Finley Query Results — {len(rows)} questions — "
-                  f"Haiku generates / Opus judges | "
+                  f"{model_label} generates / Opus judges | "
                   f"{passes}/{len(rows)} PASS | avg {avg_score}/10 | total ${total_cost:.4f}")
 ws["A1"].font      = Font(name="Calibri", bold=True, size=12, color="111827")
 ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
 ws.row_dimensions[1].height = 26
 
-# Headers
 for ci, h in enumerate(HEADERS, 1):
     c = ws.cell(row=2, column=ci, value=h)
     c.fill      = DARK
@@ -219,16 +244,12 @@ for ci, h in enumerate(HEADERS, 1):
     c.alignment = CENTER_TOP if ci not in (2, 3, 10) else Alignment(horizontal="left", vertical="center")
 ws.row_dimensions[2].height = 20
 
-# Data
 for ri, (r, j) in enumerate(zip(rows, judgments), start=3):
-    verdict = j.get("verdict", "")
-    score   = j.get("score", 0)
-    notes   = j.get("notes", "")
-    errors  = j.get("errors", [])
-    note_full = notes
-    if errors:
-        note_full += " | Errors: " + "; ".join(errors)
-
+    verdict   = j.get("verdict", "")
+    score     = j.get("score", 0)
+    notes     = j.get("notes", "")
+    errors    = j.get("errors", [])
+    note_full = notes + (" | Errors: " + "; ".join(errors) if errors else "")
     base_fill = row_fill(ri)
 
     vals = [r["n"], r["question"], r["answer"], r["runtime"],
@@ -238,13 +259,12 @@ for ri, (r, j) in enumerate(zip(rows, judgments), start=3):
     for ci, val in enumerate(vals, 1):
         c = ws.cell(row=ri, column=ci, value=val)
         c.border = BORDER
-
-        if ci == 8:  # Verdict
+        if ci == 8:
             c.fill = PASS_CLR if verdict == "PASS" else (FAIL_CLR if verdict == "FAIL" else base_fill)
             c.font = Font(name="Calibri", bold=True, size=10,
                           color="065F46" if verdict == "PASS" else "991B1B")
             c.alignment = CENTER_TOP
-        elif ci == 9:  # Score
+        elif ci == 9:
             color = "065F46" if score >= 8 else ("92400E" if score >= 6 else "991B1B")
             c.fill      = base_fill
             c.font      = Font(name="Calibri", bold=True, size=10, color=color)
@@ -257,13 +277,11 @@ for ri, (r, j) in enumerate(zip(rows, judgments), start=3):
             c.fill      = base_fill
             c.font      = BODY_FONT
             c.alignment = WRAP_TOP
-
     ws.row_dimensions[ri].height = 90
 
 for ci, w in enumerate(WIDTHS, 1):
     ws.column_dimensions[get_column_letter(ci)].width = w
 
-# Summary row
 sr = len(rows) + 3
 ws.cell(row=sr, column=1, value="TOTAL").font = NUM_FONT
 ws.cell(row=sr, column=1).alignment = CENTER_TOP
@@ -285,7 +303,6 @@ for ci, val in [(4, f"{round(sum(r['runtime'] or 0 for r in rows)/len(rows),1)}s
 ws.freeze_panes = "A3"
 wb.save(OUTPUT_FILE)
 
-# Clean up checkpoint on successful completion
 if os.path.exists(CHECKPOINT):
     os.remove(CHECKPOINT)
 

@@ -1,11 +1,15 @@
 """
-scripts/run_queries.py — Run a queries file through Haiku and export results to Excel.
+scripts/run_queries.py — Run queries through a model and export results to Excel.
 
-Supports checkpointing: if a run is interrupted, re-running resumes from where it stopped.
-Output: reports/queries_results.xlsx
+Usage:
+  python -m scripts.run_queries --model haiku    (default)
+  python -m scripts.run_queries --model sonnet
+  python -m scripts.run_queries --model gpt4     (requires OPENAI_API_KEY in .env)
+
+Output: reports/queries_results_{model}.xlsx
 """
 
-import sys, os
+import sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -13,7 +17,6 @@ import time
 
 import openpyxl
 from openpyxl.utils import get_column_letter
-from anthropic import AnthropicBedrock
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -26,15 +29,110 @@ from scripts.utils import (
     row_fill, write_title, write_header_row,
 )
 
-HAIKU_MODEL    = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-HAIKU_IN_RATE  = 1.00
-HAIKU_OUT_RATE = 5.00
-QUERIES_FILE   = "queries_new.txt"
-OUTPUT_FILE    = "reports/queries_results.xlsx"
-CHECKPOINT     = "reports/.run_queries_checkpoint.json"
-MAX_RETRIES    = 3
-RETRY_DELAY    = 5  # seconds between retries
+# ── Model registry ────────────────────────────────────────────────────────────
 
+MODELS = {
+    "haiku": {
+        "provider":  "anthropic",
+        "model_id":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "in_rate":   1.00,   # $ per 1M tokens
+        "out_rate":  5.00,
+        "label":     "Haiku 4.5",
+    },
+    "sonnet": {
+        "provider":  "anthropic",
+        "model_id":  "us.anthropic.claude-sonnet-4-6",
+        "in_rate":   3.00,
+        "out_rate":  15.00,
+        "label":     "Sonnet 4.6",
+    },
+    "gpt4": {
+        "provider":  "azure_openai",
+        "model_id":  "gpt-4.1",
+        "in_rate":   2.00,
+        "out_rate":  8.00,
+        "label":     "GPT-4.1",
+    },
+    "gpt54": {
+        "provider":              "azure_openai",
+        "model_id":              "gpt-5.4",
+        "in_rate":               15.00,   # update from platform.openai.com/pricing
+        "out_rate":              60.00,
+        "label":                 "GPT-5.4",
+        "use_completion_tokens": True,    # GPT-5+ uses max_completion_tokens not max_tokens
+    },
+}
+
+# ── Args ──────────────────────────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", choices=list(MODELS.keys()), default="haiku",
+                    help="Model to benchmark: " + ", ".join(MODELS.keys()))
+args = parser.parse_args()
+
+cfg         = MODELS[args.model]
+MODEL_LABEL = cfg["label"]
+OUTPUT_FILE = f"reports/queries_results_{args.model}.xlsx"
+CHECKPOINT  = f"reports/.run_queries_{args.model}_checkpoint.json"
+QUERIES_FILE = "queries_new.txt"
+MAX_RETRIES  = 3
+RETRY_DELAY  = 5
+
+print(f"Model: {MODEL_LABEL} ({cfg['model_id']})")
+
+# ── Build client ──────────────────────────────────────────────────────────────
+
+if cfg["provider"] == "anthropic":
+    from anthropic import AnthropicBedrock
+    client = AnthropicBedrock(
+        aws_access_key=AWS_KEY,
+        aws_secret_key=AWS_SECRET_KEY,
+        aws_region=AWS_REGION,
+    )
+    def call_model(question, summary_json):
+        r = client.messages.create(
+            model=cfg["model_id"],
+            max_tokens=1500,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"Transaction summary:\n{summary_json}\n\nQuestion: {question}"}],
+        )
+        return r.content[0].text.strip(), r.usage.input_tokens, r.usage.output_tokens
+
+elif cfg["provider"] in ("openai", "azure_openai"):
+    if cfg["provider"] == "azure_openai":
+        AZ_KEY      = os.getenv("AZURE_OPENAI_API_KEY", "")
+        AZ_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        if not AZ_KEY or not AZ_ENDPOINT:
+            print("ERROR: AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set in .env")
+            sys.exit(1)
+        from openai import AzureOpenAI
+        oa_client = AzureOpenAI(
+            api_key=AZ_KEY,
+            azure_endpoint=AZ_ENDPOINT,
+            api_version="2024-12-01-preview",
+        )
+    else:
+        OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+        if not OPENAI_KEY:
+            print("ERROR: OPENAI_API_KEY not set in .env — add it and re-run.")
+            sys.exit(1)
+        from openai import OpenAI
+        oa_client = OpenAI(api_key=OPENAI_KEY)
+
+    def call_model(question, summary_json):
+        # Newer OpenAI models (GPT-5+) use max_completion_tokens, older use max_tokens
+        token_param = "max_completion_tokens" if cfg.get("use_completion_tokens") else "max_tokens"
+        r = oa_client.chat.completions.create(
+            model=cfg["model_id"],
+            **{token_param: 1500},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": f"Transaction summary:\n{summary_json}\n\nQuestion: {question}"},
+            ],
+        )
+        inp = r.usage.prompt_tokens
+        out = r.usage.completion_tokens
+        return r.choices[0].message.content.strip(), inp, out
 
 # ── Load queries ──────────────────────────────────────────────────────────────
 
@@ -43,8 +141,7 @@ with open(QUERIES_FILE, encoding="utf-8") as f:
 queries = [line for line in raw if line and line.lower() != "question"]
 print(f"Loaded {len(queries)} queries from {QUERIES_FILE}")
 
-
-# ── Load checkpoint (resume on re-run) ───────────────────────────────────────
+# ── Load checkpoint ───────────────────────────────────────────────────────────
 
 results = []
 if os.path.exists(CHECKPOINT):
@@ -53,7 +150,6 @@ if os.path.exists(CHECKPOINT):
     print(f"Resuming from checkpoint — {len(results)}/{len(queries)} already done")
 
 done_indices = {r["n"] for r in results}
-
 
 # ── Load transaction data ─────────────────────────────────────────────────────
 
@@ -67,13 +163,6 @@ summary = process_transactions(
 )
 summary_json = json.dumps(summary)
 print(f" done ({time.time() - t0:.1f}s) — {len(summary_json):,} chars")
-
-client = AnthropicBedrock(
-    aws_access_key=AWS_KEY,
-    aws_secret_key=AWS_SECRET_KEY,
-    aws_region=AWS_REGION,
-)
-
 
 # ── Run queries ───────────────────────────────────────────────────────────────
 
@@ -89,16 +178,8 @@ for i, question in enumerate(queries, start=1):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             t_start = time.time()
-            response = client.messages.create(
-                model=HAIKU_MODEL,
-                max_tokens=1500,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": f"Transaction summary:\n{summary_json}\n\nQuestion: {question}"}],
-            )
+            answer, inp, out = call_model(question, summary_json)
             elapsed = round(time.time() - t_start, 2)
-            inp     = response.usage.input_tokens
-            out     = response.usage.output_tokens
-            answer  = response.content[0].text.strip()
             break
         except Exception as e:
             if attempt == MAX_RETRIES:
@@ -108,20 +189,18 @@ for i, question in enumerate(queries, start=1):
                 print(f" retry {attempt}...", end="", flush=True)
                 time.sleep(RETRY_DELAY * attempt)
 
-    cost = round((inp / 1_000_000 * HAIKU_IN_RATE) + (out / 1_000_000 * HAIKU_OUT_RATE), 5)
+    cost = round((inp / 1_000_000 * cfg["in_rate"]) + (out / 1_000_000 * cfg["out_rate"]), 5)
     results.append({
         "n": i, "question": question, "answer": answer,
         "runtime_s": elapsed, "input_tokens": inp, "output_tokens": out, "cost_usd": cost,
     })
 
-    # Save checkpoint after every question
     with open(CHECKPOINT, "w", encoding="utf-8") as f:
         json.dump(results, f)
 
-    print(f" {elapsed}s | {inp}in/{out}out | ${cost:.4f}")
+    print(f" {elapsed}s | {inp}in/{out}out | ${cost:.5f}")
 
 results.sort(key=lambda r: r["n"])
-
 
 # ── Build Excel ───────────────────────────────────────────────────────────────
 
@@ -132,7 +211,7 @@ wb = openpyxl.Workbook()
 ws = wb.active
 ws.title = "Results"
 
-write_title(ws, f"Finley Query Results — {len(results)} questions — Haiku model", "A1:G1")
+write_title(ws, f"Finley Query Results — {len(results)} questions — {MODEL_LABEL}", "A1:G1")
 write_header_row(ws, HEADERS, left_cols={2})
 
 for ri, r in enumerate(results, start=3):
@@ -154,7 +233,6 @@ for ri, r in enumerate(results, start=3):
 for ci, w in enumerate(COL_WIDTHS, 1):
     ws.column_dimensions[get_column_letter(ci)].width = w
 
-# Summary row
 sr = len(results) + 3
 total_cost  = round(sum(r["cost_usd"] for r in results), 4)
 avg_runtime = round(sum(r["runtime_s"] for r in results) / len(results), 2)
@@ -175,7 +253,6 @@ for ci, val in zip([4, 5, 6, 7], [f"{avg_runtime}s avg", total_in, total_out, to
 ws.freeze_panes = "A3"
 wb.save(OUTPUT_FILE)
 
-# Clean up checkpoint on successful completion
 if os.path.exists(CHECKPOINT):
     os.remove(CHECKPOINT)
 

@@ -180,8 +180,11 @@ def _build_top_transactions(spending: pd.DataFrame, last_complete_month: str | N
         (spending["_month"] == last_complete_month) &
         (spending["primary_category"] != "TRANSFER_OUT")
     ].nlargest(15, "amount")
+    cols = ["transaction_date", "merchant_name", "primary_category", "sub_category", "amount"]
+    if "name" in subset.columns:
+        cols.insert(2, "name")
     return (
-        subset[["transaction_date", "merchant_name", "name", "primary_category", "sub_category", "amount"]]
+        subset[cols]
         .assign(transaction_date=lambda x: x["transaction_date"].dt.strftime("%Y-%m-%d"))
         .fillna("").to_dict("records")
     )

@@ -7,7 +7,7 @@ Show me the largest transactions for the month
 Analyze my spending patterns and show me where I might be overspending
 Show me a breakdown of my spending this month with key insights and trends
 How does this month compare to last month?
-Where are my over spending right now?
+Where am I over spending right now?
 what about compared to the past few months
 Where did I spend my money on restaurants and food?
 Break down my spending by category
