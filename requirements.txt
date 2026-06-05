@@ -1,7 +1,9 @@
 anthropic==0.96.0
 anyio==4.9.0
 langfuse==4.5.1
+numpy>=1.26.0
 openpyxl==3.1.5
 pandas==2.3.0
 python-dotenv==1.1.0
+sentence-transformers>=3.0.0
 streamlit==1.50.0

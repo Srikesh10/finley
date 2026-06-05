@@ -15,6 +15,9 @@ reports/
 # Cache
 .finley_cache/
 
+# Cross-session memory (contains user conversation data)
+.finley_memory/
+
 # Python
 __pycache__/
 *.py[cod]

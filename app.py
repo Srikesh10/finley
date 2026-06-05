@@ -17,6 +17,7 @@ from finley import (
     MODEL, SONNET_MODEL, HAIKU_MODEL,
     classify, classify_complexity, python_answer,
 )
+from finley.memory import MemoryStore
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 
@@ -209,6 +210,11 @@ def get_client():
             aws_region=AWS_REGION,
         )
     return st.session_state.client
+
+def get_memory() -> MemoryStore:
+    if "memory" not in st.session_state:
+        st.session_state.memory = MemoryStore()
+    return st.session_state.memory
 
 CHAT_WINDOW = 8  # recent chat messages to keep beyond the first pair
 
@@ -503,13 +509,23 @@ def render_chat():
             chat_model = HAIKU_MODEL if complexity == "data" else SONNET_MODEL
 
             client = get_client()
+            memory = get_memory()
+
+            # Retrieve relevant past advice exchanges and prepend to system prompt
+            system_with_memory = SYSTEM_PROMPT
+            if complexity == "advice":
+                matches = memory.search(question)
+                context = memory.format_context(matches)
+                if context:
+                    system_with_memory = SYSTEM_PROMPT + "\n\n" + context
+
             response_text = ""
             resp_placeholder = st.empty()
 
             with client.messages.stream(
                 model=chat_model,
                 max_tokens=1000,
-                system=SYSTEM_PROMPT,
+                system=system_with_memory,
                 messages=_build_api_messages(st.session_state.messages),
             ) as stream:
                 for text in stream.text_stream:
@@ -519,6 +535,10 @@ def render_chat():
                         unsafe_allow_html=True,
                     )
             resp_placeholder.empty()
+
+            # Only store advice answers — data answers go stale with new transactions
+            if complexity == "advice":
+                memory.store(question, response_text)
 
             st.session_state.suggestions = _generate_suggestions(question, response_text, client)
 
