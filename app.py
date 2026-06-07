@@ -218,12 +218,37 @@ def get_memory() -> MemoryStore:
 
 CHAT_WINDOW = 8  # recent chat messages to keep beyond the first pair
 
-def _generate_suggestions(question: str, answer: str, client) -> list:
+def _suggestion_context(summary: dict) -> str:
+    """Build a compact data snapshot for grounding question suggestions."""
+    lines = []
+    cats = summary.get("by_category", {})
+    if cats:
+        top = sorted(cats.items(), key=lambda x: x[1].get("total", 0), reverse=True)[:5]
+        lines.append("Top spending categories: " + ", ".join(f"{k} ${v.get('total',0):.0f}" for k, v in top))
+    subs = summary.get("subscriptions", [])
+    if subs:
+        names = [s.get("merchant_name", s.get("name", "")) for s in subs[:6]]
+        lines.append("Active subscriptions: " + ", ".join(n for n in names if n))
+    sts = summary.get("safe_to_spend")
+    if sts is not None:
+        lines.append(f"Safe to spend this month: ${sts:.0f}")
+    monthly = summary.get("monthly_spending", {})
+    if monthly:
+        last_month_total = list(monthly.values())[-1] if monthly else None
+        if last_month_total:
+            lines.append(f"Last month total: ${last_month_total:.0f}")
+    return "\n".join(lines)
+
+
+def _generate_suggestions(question: str, answer: str, summary: dict, client) -> list:
+    data_context = _suggestion_context(summary)
     prompt = (
-        f"The user asked: {question}\n\n"
+        f"User's financial snapshot:\n{data_context}\n\n"
+        f"The user just asked: {question}\n"
         f"Finley answered: {answer}\n\n"
-        "Suggest 3 short follow-up questions the user might ask about their finances. "
-        "Each question must be 6-10 words. Return a JSON array of 3 strings only, no explanation."
+        "Based on this user's actual financial data, suggest 3 short questions they might "
+        "want to ask next. Questions must be specific to their data, 6-10 words each. "
+        "Return a JSON array of 3 strings only, no explanation."
     )
     try:
         resp = client.messages.create(
@@ -503,6 +528,9 @@ def render_chat():
             response_text = python_answer(question, summary) or ""
             if not response_text:
                 route = "llm"
+            else:
+                client = get_client()
+                st.session_state.suggestions = _generate_suggestions(question, response_text, summary, client)
 
         if route == "llm":
             complexity = classify_complexity(question)
@@ -540,7 +568,7 @@ def render_chat():
             if complexity == "advice":
                 memory.store(question, response_text)
 
-            st.session_state.suggestions = _generate_suggestions(question, response_text, client)
+            st.session_state.suggestions = _generate_suggestions(question, response_text, summary, client)
 
         st.session_state.messages.append({"role": "assistant", "content": response_text})
         st.rerun()

@@ -36,7 +36,8 @@ def check(label, condition, detail=""):
 print("\n-- TEST 1: Question Recommendations ------------------------------------")
 print("   Calls Haiku with a sample Q&A and checks 3 suggestions are returned.\n")
 
-from finley.client import make_client, HAIKU_MODEL
+from finley.client import make_client
+from app import _generate_suggestions
 
 client = make_client()
 
@@ -45,44 +46,46 @@ sample_answer   = ("You spent $842 on food and drink last month across 34 transa
                    "Your top merchants were Zomato ($210), Swiggy ($175), and Starbucks ($98). "
                    "This is 18% above your 6-month average of $714.")
 
-prompt = (
-    f"The user asked: {sample_question}\n\n"
-    f"Finley answered: {sample_answer}\n\n"
-    "Suggest 3 short follow-up questions the user might ask about their finances. "
-    "Each question must be 6-10 words. Return a JSON array of 3 strings only, no explanation."
-)
+# Simulate a real transaction summary snapshot
+sample_summary = {
+    "by_category": {
+        "FOOD_AND_DRINK":   {"total": 842},
+        "SHOPPING":         {"total": 620},
+        "TRANSPORTATION":   {"total": 280},
+        "ENTERTAINMENT":    {"total": 195},
+        "GENERAL_SERVICES": {"total": 140},
+    },
+    "subscriptions": [
+        {"merchant_name": "Netflix"},
+        {"merchant_name": "Spotify"},
+        {"merchant_name": "Amazon Prime"},
+    ],
+    "safe_to_spend": 320.0,
+    "monthly_spending": {"2026-04": 2140, "2026-05": 2840},
+}
 
 try:
-    resp = client.messages.create(
-        model=HAIKU_MODEL,
-        max_tokens=150,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = resp.content[0].text.strip()
-    start, end = raw.find("["), raw.rfind("]")
-    suggestions = json.loads(raw[start : end + 1])
+    suggestions = _generate_suggestions(sample_question, sample_answer, sample_summary, client)
 
-    check("Returns a list",          isinstance(suggestions, list),        f"type={type(suggestions).__name__}")
-    check("Exactly 3 suggestions",   len(suggestions) == 3,                f"got {len(suggestions)}")
-    check("All strings",             all(isinstance(s, str) for s in suggestions))
-    check("All non-empty",           all(len(s.strip()) > 0 for s in suggestions))
-    check("Relevant to food/spend",  any(
-        any(w in s.lower() for w in ["food", "spend", "zomato", "swiggy", "coffee",
-                                      "restaurant", "dining", "month", "budget", "average"])
+    check("Returns a list",        isinstance(suggestions, list),     f"type={type(suggestions).__name__}")
+    check("Exactly 3 suggestions", len(suggestions) == 3,             f"got {len(suggestions)}")
+    check("All strings",           all(isinstance(s, str) for s in suggestions))
+    check("All non-empty",         all(len(s.strip()) > 0 for s in suggestions))
+    check("Grounded in user data", any(
+        any(w in s.lower() for w in ["food", "subscription", "netflix", "spotify",
+                                      "shopping", "transport", "spend", "budget",
+                                      "safe", "month", "zomato", "swiggy"])
         for s in suggestions
-    ), "at least one suggestion references the topic")
+    ), "at least one suggestion references the user's actual data")
 
-    print(f"\n   Suggestions returned:")
+    print(f"\n   Suggestions returned (grounded in transaction data):")
     for i, s in enumerate(suggestions, 1):
         print(f"     {i}. {s}")
 
 except Exception as e:
-    check("API call succeeded", False, str(e))
-    check("Returns a list",    False)
-    check("Exactly 3 suggestions", False)
-    check("All strings",       False)
-    check("All non-empty",     False)
-    check("Relevant to food/spend", False)
+    for label in ["API call succeeded", "Returns a list", "Exactly 3 suggestions",
+                  "All strings", "All non-empty", "Grounded in user data"]:
+        check(label, False, str(e))
 
 # -- Test 2: Vector Search (cross-session semantic memory) --------------------─
 
