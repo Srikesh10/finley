@@ -1,0 +1,222 @@
+FINLEY AI — TEST MANUAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Date: 2026-06-07
+Prepared by: Srikesh Reddy Gaddam (Financial Wellness Labs intern)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HOW TO START
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Terminal:
+    cd D:\FINADV
+    streamlit run app.py
+
+  Opens at: http://localhost:8501
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 1 — Upload and Analysis
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Steps:
+  1. Click "Load demo transactions" (or upload a CSV file)
+  2. Wait for the analysis to complete (5–15 seconds)
+
+Pass:
+  - Dashboard appears with spending summary, top categories, and trends
+  - App goes straight to chat — no profile questions or onboarding asked
+  - Financial summary is rendered with clear markdown formatting
+
+Fail indicators:
+  - Any error message or stack trace in the UI
+  - App asks questions about your age, income, or goals before showing data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 2 — Data Queries (factual lookups)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+These questions are answered from pre-computed data — either instantly
+by Python or via Haiku (fast, cheap model for lookups).
+
+Questions to try:
+  "How much did I spend last month?"
+  "What are my top 5 spending categories?"
+  "How much have I spent on food and drink?"
+  "Show me my subscription list"
+  "What was my biggest single transaction?"
+  "How much did I spend on shopping this year?"
+
+Pass:
+  - Specific dollar amounts in the response
+  - Response arrives in 2–8 seconds
+  - Numbers are consistent with the transaction data
+
+Fail indicators:
+  - Vague answers without figures ("it seems you may have spent...")
+  - "I don't have access to your transactions"
+  - Figures that contradict each other across questions
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 3 — Advice Queries (reasoning + recommendations)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+These require judgment rather than simple lookup.
+Routed to Sonnet (the more capable reasoning model).
+
+Questions to try:
+  "Should I be worried about my spending?"
+  "How can I cut my monthly expenses?"
+  "Am I saving enough?"
+  "What's my biggest financial risk right now?"
+  "What subscriptions should I cancel?"
+  "How does my food spending compare to healthy benchmarks?"
+
+Pass:
+  - Recommendations reference the user's actual figures, not generic advice
+  - Response arrives in 10–20 seconds (Sonnet is slower but more thorough)
+  - Advice is specific: names categories, amounts, and actionable steps
+
+Fail indicators:
+  - Generic advice that could apply to anyone regardless of their data
+  - No reference to actual spending numbers from the transaction history
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 4 — Question Recommendations
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After each chat response, Finley generates 3 follow-up question suggestions
+tailored to what was just answered. These appear as clickable chips.
+
+Steps:
+  1. Ask any question (data or advice)
+  2. Wait for the response to complete
+  3. Look below the response for 3 suggested follow-up questions
+  4. Click one of them
+
+Pass:
+  - 3 follow-up suggestions appear after every response
+  - Suggestions are specific to the answer (not generic filler questions)
+  - Clicking a suggestion auto-submits it as the next message
+  - The follow-up answer is consistent with the previous response
+
+Fail indicators:
+  - No suggestions appear after the response
+  - Suggestions are generic ("Tell me more", "What else?")
+  - Clicking a suggestion does nothing
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 5 — Multi-Turn Conversation (rolling context window)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Tests whether follow-up questions work without repeating context.
+Finley keeps the last 8 message pairs in memory during a session.
+
+Steps:
+  1. Ask: "How much did I spend on dining last month?"
+  2. Wait for the answer
+  3. Ask: "How does that compare to the month before?"
+  4. Ask: "Which restaurants came up most often?"
+
+Pass:
+  - Each follow-up correctly refers to the topic from step 1
+  - "that" and "the month before" are interpreted correctly without clarification
+  - Figures stay consistent across the conversation
+
+Fail indicators:
+  - "I'm not sure what you're referring to"
+  - Finley treats each question as a fresh conversation with no memory
+  - Contradictory figures across turns
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 6 — Cross-Session Semantic Memory (vector search)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Finley remembers advice answers across separate sessions using semantic
+vector search. Each advice answer is embedded as a 384-number vector and
+stored locally. When a similar question comes in, the closest match is
+retrieved and injected into context — even if the wording is different.
+
+Only advice answers are stored (data lookups go stale as transactions change).
+
+Session 1:
+  1. Start the app, load data
+  2. Ask: "Should I pay off my credit card or start investing?"
+  3. Get the full answer
+  4. Close the browser and stop the app (Ctrl+C in terminal)
+
+Session 2:
+  1. Restart the app (streamlit run app.py), load data again
+  2. Ask a similarly-worded but different question:
+     "Is it better to clear my debt before putting money into savings?"
+
+Pass:
+  - The response in Session 2 aligns with or references the advice from Session 1
+  - In the terminal running Finley, you should see:
+    "Relevant context from previous conversations:" printed before the API call
+  - The answer feels informed by the prior session, not starting from scratch
+
+Fail indicators:
+  - Session 2 answer completely ignores the prior advice
+  - No terminal output indicating memory retrieval
+  - App crashes on startup (check if .finley_memory/ folder exists)
+
+How it works (for reference):
+  - Model: all-MiniLM-L6-v2 (sentence-transformers, ~22MB, runs locally)
+  - Storage: .finley_memory/conversations.json + embeddings.npy
+  - Search: cosine similarity — incoming question converted to 384 numbers,
+    compared against all stored question vectors, closest match above 0.55
+    similarity is injected into the system prompt
+  - No external vector database — runs entirely on disk using numpy
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEST 7 — Routing Verification
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Verifies that the three-tier routing sends each question to the right handler.
+Check the terminal running Finley for routing output.
+
+  "What is my total spending this year?"
+    → Should route to Python (instant answer, $0 cost)
+
+  "How much did I spend on coffee?"
+    → Should route to Haiku (data lookup, 3–8 seconds)
+
+  "Should I be saving more given my current spending?"
+    → Should route to Sonnet (advice, 10–20 seconds)
+
+Pass:
+  - Terminal shows route label for each question
+  - Python responses arrive in under 1 second
+  - Haiku responses arrive in 3–8 seconds
+  - Sonnet responses arrive in 10–20 seconds
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUTOMATED TEST RESULTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Run:  cd D:\FINADV && python -m scripts.test_memory
+
+  Semantic memory — paraphrase retrieval (5 test pairs):
+    [PASS] "Should I invest in my 401k or clear my credit card debt first?"
+           matched with score 0.802
+    [PASS] "Is my emergency fund big enough?"
+           matched with score 0.590
+    [PASS] "What's the best strategy to pay down what I owe?"
+           matched with score 0.691
+    [PASS] "I want to go on a trip — can I afford it?"
+           matched with score 0.693
+    [PASS] "Where am I overspending the most?"
+           matched with score 0.662
+
+  Result: 5/5 PASS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KNOWN LIMITATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  "Am I paying for Amazon Prime?" cannot be answered definitively.
+  Bank data tags all charges as "Amazon" without distinguishing Prime
+  subscriptions from regular Amazon purchases. This requires richer merchant
+  metadata from the bank feed — no model or architecture can solve it without
+  that data.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
